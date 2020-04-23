@@ -6,51 +6,55 @@ void getRGB(uint16_t hue, uint8_t val, uint8_t colors[3]) {
      The dim_curve is used only on brightness/value and on saturation (inverted).
      This looks the most natural.
   */
-
-  val = dim_curve[val];
-  hue = hue % 360;
-
   uint8_t r;
   uint8_t g;
   uint8_t b;
-  uint8_t base;
 
-  switch(hue/60) {
-    case 0:
-        r = val;
-        g = ((val*hue)/60)+base;
-        b = base;
-    break;
+  if(val == 0) {
+    r = 0;
+    g = 0;
+    b = 0;
+  } else {
+    val = dim_curve[val];
+    hue = hue % 360;
 
-    case 1:
-        r = ((val*(60-(hue%60)))/60)+base;
-        g = val;
-        b = base;
-    break;
+    switch(hue/60) {
+      case 0:
+          r = val;
+          g = ((val*hue)/60);
+          b = 0;
+      break;
 
-    case 2:
-        r = base;
-        g = val;
-        b = ((val*(hue%60))/60)+base;
-    break;
+      case 1:
+          r = ((val*(60-(hue%60)))/60);
+          g = val;
+          b = 0;
+      break;
 
-    case 3:
-        r = base;
-        g = ((val*(60-(hue%60)))/60)+base;
-        b = val;
-    break;
+      case 2:
+          r = 0;
+          g = val;
+          b = ((val*(hue%60))/60);
+      break;
 
-    case 4:
-        r = ((val*(hue%60))/60)+base;
-        g = base;
-        b = val;
-    break;
+      case 3:
+          r = 0;
+          g = ((val*(60-(hue%60)))/60);
+          b = val;
+      break;
 
-    case 5:
-        r = val;
-        g = base;
-        b = ((val*(60-(hue%60)))/60)+base;
-    break;
+      case 4:
+          r = ((val*(hue%60))/60);
+          g = 0;
+          b = val;
+      break;
+
+      case 5:
+          r = val;
+          g = 0;
+          b = ((val*(60-(hue%60)))/60);
+      break;
+    }
   }
 
   colors[0]=r;
