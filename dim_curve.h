@@ -1,8 +1,9 @@
 #ifndef __DIM_CURVE_H__
 #define __DIM_CURVE_H__
 #include <stdint.h>
+#include <avr/pgmspace.h>
 
-const uint8_t dim_curve[] = {
+const uint8_t dim_curve[] PROGMEM = {
     0,   1,   1,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   3,   3,   3,
     3,   3,   3,   3,   3,   3,   3,   4,   4,   4,   4,   4,   4,   4,   4,   4,
     4,   4,   4,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   6,   6,   6,

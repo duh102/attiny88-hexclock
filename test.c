@@ -1,11 +1,16 @@
+#include <avr/io.h>
 #include <util/delay.h>
 #include <stdint.h>
 #include <avr/interrupt.h>
 #include "ws2812.h"
 #include "hsv_rgb.h"
 #include <stdbool.h>
+#include <avr/pgmspace.h>
+#include "twimaster/i2cmaster.h"
+#include "mcp7940_tiny.h"
 
 #define DOUT PC0
+#define SQW PD2
 #define HH PC1
 #define MM PC2
 #define UPMIN (1<<MM)
@@ -14,100 +19,111 @@
 volatile uint8_t buttonDown = 0;
 volatile bool checkButton = false;
 volatile bool updateDigits = false;
-bool led = false;
-#define _USE_DELAY
+volatile bool led = false;
 
+uint8_t digit_value = 0;
+uint8_t temp0 = 0;
 
 #define MAX_LED 18
+// The state of the rainbow
 uint16_t state = 0;
+// reserving a byte for loop variant
 uint8_t curLed;
+// reserving 3*(leds) bytes for keeping the data easily accessible
 uint8_t colors[MAX_LED][3];
-#define STATUS_LED 17
-#define HOUR_START 12
-#define MINUTE_START 6
-#define SECOND_START 0
 
+#define STATUS_D 17
+// The start of the 10s place in hour
+#define HH_D 12
+// The start of the 10s place in minute
+#define MM_D 6
+// The start of the 10s place in second
+#define SS_D 0
 
-uint8_t seconds = 0;
-uint8_t minutes = 0;
-uint8_t hours = 0;
-volatile uint8_t pSec = 0, qSec = 0;
-#define QSEC_MAX 128
+volatile uint8_t seconds = 99;
+volatile uint8_t minutes = 99;
+volatile uint8_t hours = 99;
 
 ISR(PCINT1_vect) {
   checkButton=true;
 }
-#ifndef _USE_DELAY
 ISR(INT0_vect) {
-  pSec++;
-  if(!pSec) {
-    qSec++;
-  }
+  seconds++;
+  led = !led;
+  updateDigits = true;
 }
-#endif
 
 void updateDisplay();
 void loop();
 
 int main() {
-  CLKPR = 0x80;   // allow writes to CLKPSR
+  CLKPR = 1<<CLKPCE;   // allow writes to CLKPR
   CLKPR = 0;   // disable system clock prescaler (run at full 8MHz)
 
   //setup PCI1 for PCINT9 and 10, for PC1 and 2
   PCMSK1 |= (1<<PCINT9) | (1<<PCINT10);
-  //Setup PCINT0 to be enabled
+  //Setup PCINT1 to be enabled
   PCICR |= 1<<PCIE1;
 
-  //Setup HH and MM as inputs, all other pins on port C as outputs (including DOUT)
-  DDRC = ~((1<<HH) | (1<<MM));
-  PORTC |= ((1<<HH) | (1<<MM));
+  //Setup HH and MM as inputs, all other pins on port C as outputs
+  DDRC = (uint8_t)( ~(UPMIN | UPHOUR));
+  PORTC |= (UPMIN | UPHOUR);
 
-#ifndef _USE_DELAY
   // Setup INT0 to trigger on falling edge
-  EICRA |= (1<<ISC01) | (1<<ISC00);
+  EICRA = 1<<ISC01;
   // Setup INT0 to be enabled
-  EIMSK |= 1<<INT0;
-#endif
+  EIMSK = 1<<INT0;
 
+  // Enable the display
   ws2812_init();
+
+  // Enable I2C communication
+  i2c_init();
+  // Enable the RTC
+  uint8_t failCode = 1;
+  while(failCode) {
+    failCode = mcp7940_init();
+    if(failCode) {
+      _delay_ms(100);
+    }
+  }
+
+  mcp7940_setControlRegister( (1<<MCP7940_SQWEN) | SQWV_1HZ );
+
+  mcp7940_setBatteryBackup(true);
+
+  seconds = mcp7940_getSeconds();
+
+  minutes = mcp7940_getMinutes();
+
+  // bit 5 indicates whether we're in 12 or 24 hour mode
+  hours = mcp7940_getHours();
+
+  if(hours & (1<<5)) {
+    //we want to be in 24 hour mode
+    mcp7940_setHours( (hours&(1<<4)?12:0) + (hours&0b111), false);
+    hours = mcp7940_getHours();
+  }
+  hours = hours & 0b11111;
+
   updateDigits=true;
-
-  sei();
-
   while(1) {
     loop();
   }
 }
 
 void loop() {
-#ifndef _USE_DELAY
-  if(qSec >= QSEC_MAX) {
-    qSec-= QSEC_MAX;
-#endif
-#ifdef _USE_DELAY
-  if(qSec >= 10) {
-    qSec = 0;
-#endif
-    led = !led;
-    seconds++;
-    if(seconds == 60) {
-      seconds = 0;
-      minutes++;
-      if(minutes == 60) {
-        minutes = 0;
-        hours++;
-        if(hours == 24) {
-          hours = 0;
-        }
-      }
+  if(seconds>59) {
+    seconds = seconds % 60;
+    minutes++;
+    if(minutes == 60) {
+      minutes = mcp7940_getMinutes();
+      hours = mcp7940_getHours();
+      hours = hours & 0b11111;
     }
-    updateDigits = true;
   }
   if(!checkButton && !updateDigits) {
     _delay_ms(100);
-#ifdef _USE_DELAY
-    qSec++;
-#endif
     return;
   }
   if(checkButton) {
@@ -119,11 +135,16 @@ void loop() {
     } else {
       if(buttonDown == 0) {
         buttonDown = BUTTONDOWN_RESET;
-        minutes = (minutes + (buttonState&UPMIN? 1 : 0)) % 60;
         if(buttonState&UPMIN) {
+          minutes = (minutes + 1) % 60;
           seconds = 0;
+          mcp7940_setSeconds(seconds, true);
+          mcp7940_setMinutes(minutes);
         }
-        hours = (hours + (buttonState&UPHOUR? 1 : 0)) % 24;
+        if(buttonState&UPHOUR) {
+          hours = (hours + 1) % 24;
+          mcp7940_setHours(hours, false);
+        }
         updateDigits = true;
       }
       buttonDown--;
@@ -138,34 +159,49 @@ void loop() {
 
 void updateDisplay() {
   state+=5;
-  for(curLed = 0; curLed < MINUTE_START; curLed++) {
-    if(!(1<<curLed & seconds)) {
+  // seconds
+  digit_value = seconds & 0b111111;
+  for(curLed = SS_D; curLed < MM_D; curLed++) {
+    temp0 = curLed-SS_D;
+    if( !(digit_value & (1<<temp0)) ) {
       colors[curLed][0] = 0;
       colors[curLed][1] = 0;
       colors[curLed][2] = 0;
       continue;
     }
-    getRGB(state, 50, colors[curLed]);
+    getRGB(state+(14*curLed), 50, colors[curLed]);
   }
-  for(curLed = MINUTE_START; curLed < HOUR_START; curLed++) {
-    if(!(1<<(curLed-6) & minutes)) {
+  // minutes
+  digit_value = minutes & 0b111111;
+  for(curLed = MM_D; curLed < HH_D; curLed++) {
+    temp0 = curLed-MM_D;
+    if( !(digit_value & (1<<temp0)) ) {
       colors[curLed][0] = 0;
       colors[curLed][1] = 0;
       colors[curLed][2] = 0;
       continue;
     }
-    getRGB(state+60, 50, colors[curLed]);
+    getRGB(state+(14*curLed), 50, colors[curLed]);
   }
-  for(curLed = HOUR_START; curLed < STATUS_LED; curLed++) {
-    if(!(1<<(curLed-12) & hours)) {
+  // hours
+  digit_value = hours & 0b11111;
+  for(curLed = HH_D; curLed < STATUS_D; curLed++) {
+    temp0 = curLed-HH_D;
+    if( !(digit_value & (1<<temp0)) ) {
       colors[curLed][0] = 0;
       colors[curLed][1] = 0;
       colors[curLed][2] = 0;
       continue;
     }
-    getRGB(state+120, 50, colors[curLed]);
+    getRGB(state+(14*curLed), 50, colors[curLed]);
   }
-  getRGB(state+180, led? 50 : 0, colors[STATUS_LED]);
+  if(led) {
+    getRGB(state+(14*STATUS_D), 50, colors[STATUS_D]);
+  } else {
+    colors[STATUS_D][0] = 0;
+    colors[STATUS_D][1] = 0;
+    colors[STATUS_D][2] = 0;
+  }
   cli();
   for(curLed = 0; curLed < MAX_LED; curLed++) {
     ws2812_set_single(colors[curLed][0],colors[curLed][1],colors[curLed][2]);

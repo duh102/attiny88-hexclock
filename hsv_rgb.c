@@ -1,5 +1,6 @@
 #include "dim_curve.h"
 #include <stdint.h>
+#include <avr/pgmspace.h>
 
 void getRGB(uint16_t hue, uint8_t val, uint8_t colors[3]) {
   /* convert hue, saturation and brightness ( HSB/HSV ) to RGB
@@ -15,7 +16,7 @@ void getRGB(uint16_t hue, uint8_t val, uint8_t colors[3]) {
     g = 0;
     b = 0;
   } else {
-    val = dim_curve[val];
+    val = pgm_read_byte(&dim_curve[val]);
     hue = hue % 360;
 
     switch(hue/60) {
